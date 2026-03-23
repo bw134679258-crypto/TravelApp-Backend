@@ -106,6 +106,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Travel App API", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+import os
+os.makedirs("uploads", exist_ok=True)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 async def get_db():
