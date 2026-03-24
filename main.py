@@ -1,6 +1,6 @@
 import logging
 import os
-import shutil
+import httpx
 from contextlib import asynccontextmanager
 from typing import List, Optional
 from datetime import date
@@ -18,7 +18,12 @@ logger = logging.getLogger(__name__)
 # --- Setup Uploads ---
 os.makedirs("uploads", exist_ok=True)
 
-DATABASE_URL = "sqlite+aiosqlite:///./travel.db"
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./travel.db")
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
+elif DATABASE_URL.startswith("postgresql://") and not DATABASE_URL.startswith("postgresql+asyncpg://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+
 engine = create_async_engine(DATABASE_URL, echo=False)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -180,12 +185,20 @@ async def delete_place(place_id: int, db: AsyncSession = Depends(get_db)):
 async def upload_place_image(place_id: int, file: UploadFile = File(...), db: AsyncSession = Depends(get_db)):
     place = await db.get(PlaceDB, place_id)
     if not place: raise HTTPException(status_code=404)
-    file_path = f"uploads/place_{place_id}_{file.filename}"
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-    place.image_url = f"/{file_path}"
-    await db.commit()
-    return {"image_url": place.image_url}
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            files = {'fileToUpload': (file.filename, file.file, file.content_type)}
+            data = {'reqtype': 'fileupload'}
+            response = await client.post("https://catbox.moe/user/api.php", data=data, files=files, timeout=30.0)
+            response.raise_for_status()
+            image_url = response.text.strip()
+            place.image_url = image_url
+            await db.commit()
+            return {"image_url": image_url}
+    except Exception as e:
+        logger.error(f"Image upload failed: {e}")
+        raise HTTPException(status_code=500, detail="Image upload failed")
 
 # --- Routes: Checklists ---
 @app.post("/places/{place_id}/checklists", response_model=ChecklistItemResponse, status_code=201)
